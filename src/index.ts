@@ -109,19 +109,25 @@ const api = new TogglAPI(API_KEY);
 const cache = new CacheManager(cacheConfig);
 cache.setAPI(api);
 
-// Track if cache has been warmed
 let cacheWarmed = false;
+// In-flight warm-up so concurrent first requests share one sweep against
+// the Toggl API instead of each firing a duplicate.
+let warmPromise: Promise<void> | null = null;
 
-// Helper to ensure cache is warm
 async function ensureCache(): Promise<void> {
-  if (!cacheWarmed) {
+  if (cacheWarmed) return;
+  if (warmPromise) return warmPromise;
+  warmPromise = (async () => {
     try {
       await cache.warmCache(defaultWorkspaceId);
       cacheWarmed = true;
     } catch (error) {
       console.error('Failed to warm cache:', error);
+    } finally {
+      warmPromise = null;
     }
-  }
+  })();
+  return warmPromise;
 }
 
 // Build a fresh Server with all request handlers registered. The MCP SDK's
