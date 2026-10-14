@@ -257,11 +257,14 @@ export class TogglAPI {
     return this.updateTimeEntry(workspaceId, timeEntryId, { stop: now });
   }
   
-  // Bulk operations for efficiency
+  // Bulk operations for efficiency. endDate is exclusive.
+  // Send full RFC3339 instants: the v9 endpoint reads a bare YYYY-MM-DD as a
+  // UTC day regardless of the profile timezone, which shifts every local day
+  // by the UTC offset (00:00-09:00 JST would land on the previous day).
   async getTimeEntriesForDateRange(startDate: Date, endDate: Date): Promise<TimeEntry[]> {
     const params: TimeEntriesRequest = {
-      start_date: startDate.toISOString().split('T')[0],
-      end_date: endDate.toISOString().split('T')[0]
+      start_date: startDate.toISOString(),
+      end_date: endDate.toISOString()
     };
     
     return this.getTimeEntries(params);
@@ -278,18 +281,17 @@ export class TogglAPI {
   
   async getTimeEntriesForWeek(weekOffset = 0): Promise<TimeEntry[]> {
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const dayOfWeek = today.getDay();
     const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Adjust for Sunday
     
-    const monday = new Date(today.setDate(diff));
-    monday.setDate(monday.getDate() + (weekOffset * 7));
-    monday.setHours(0, 0, 0, 0);
+    const monday = new Date(today);
+    monday.setDate(diff + (weekOffset * 7));
     
-    const sunday = new Date(monday);
-    sunday.setDate(sunday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
+    const nextMonday = new Date(monday);
+    nextMonday.setDate(nextMonday.getDate() + 7);
     
-    return this.getTimeEntriesForDateRange(monday, sunday);
+    return this.getTimeEntriesForDateRange(monday, nextMonday);
   }
   
   async getTimeEntriesForMonth(monthOffset = 0): Promise<TimeEntry[]> {
@@ -298,9 +300,9 @@ export class TogglAPI {
     const month = today.getMonth() + monthOffset;
     
     const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
+    const firstDayNextMonth = new Date(year, month + 1, 1);
     
-    return this.getTimeEntriesForDateRange(firstDay, lastDay);
+    return this.getTimeEntriesForDateRange(firstDay, firstDayNextMonth);
   }
   
   async searchTimeEntriesPage(

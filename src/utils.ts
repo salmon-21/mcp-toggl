@@ -39,7 +39,31 @@ export function formatDate(dateStr: string): string {
   });
 }
 
-// Get date range for various periods
+// Format a Date as YYYY-MM-DD in the host's local timezone.
+export function toLocalYMD(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Parse a YYYY-MM-DD string into a Date at local midnight. `new Date('YYYY-MM-DD')`
+// would parse it as UTC midnight, which lands on the previous local day east of UTC.
+export function parseLocalYMD(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, (month ?? 1) - 1, day ?? 1, 0, 0, 0, 0);
+}
+
+// Local midnight of the day after `value`, i.e. the exclusive end of an
+// inclusive YYYY-MM-DD end date.
+export function parseInclusiveEndDate(value: string): Date {
+  const date = parseLocalYMD(value);
+  date.setDate(date.getDate() + 1);
+  return date;
+}
+
+// Get date range for various periods. `end` is exclusive (local midnight
+// after the last day), matching how the v9 time entries endpoint treats it.
 export function getDateRange(period: 'today' | 'yesterday' | 'week' | 'lastWeek' | 'month' | 'lastMonth'): DateRange {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -60,35 +84,33 @@ export function getDateRange(period: 'today' | 'yesterday' | 'week' | 'lastWeek'
     case 'week': {
       const dayOfWeek = today.getDay();
       const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-      const monday = new Date(today.setDate(diff));
-      const sunday = new Date(monday);
-      sunday.setDate(sunday.getDate() + 6);
-      sunday.setHours(23, 59, 59, 999);
-      return { start: monday, end: sunday };
+      const monday = new Date(today);
+      monday.setDate(diff);
+      const nextMonday = new Date(monday);
+      nextMonday.setDate(nextMonday.getDate() + 7);
+      return { start: monday, end: nextMonday };
     }
     
     case 'lastWeek': {
       const dayOfWeek = today.getDay();
       const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1) - 7;
-      const monday = new Date(today.setDate(diff));
-      const sunday = new Date(monday);
-      sunday.setDate(sunday.getDate() + 6);
-      sunday.setHours(23, 59, 59, 999);
-      return { start: monday, end: sunday };
+      const monday = new Date(today);
+      monday.setDate(diff);
+      const nextMonday = new Date(monday);
+      nextMonday.setDate(nextMonday.getDate() + 7);
+      return { start: monday, end: nextMonday };
     }
     
     case 'month': {
       const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-      const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-      lastDay.setHours(23, 59, 59, 999);
-      return { start: firstDay, end: lastDay };
+      const firstDayNextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+      return { start: firstDay, end: firstDayNextMonth };
     }
     
     case 'lastMonth': {
       const firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
-      lastDay.setHours(23, 59, 59, 999);
-      return { start: firstDay, end: lastDay };
+      const firstDayThisMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+      return { start: firstDay, end: firstDayThisMonth };
     }
   }
 }
@@ -98,7 +120,8 @@ export function groupEntriesByDate(entries: HydratedTimeEntry[]): Map<string, Hy
   const grouped = new Map<string, HydratedTimeEntry[]>();
   
   entries.forEach(entry => {
-    const date = entry.start.split('T')[0];
+    // entry.start is UTC; bucket by the local calendar day instead.
+    const date = toLocalYMD(new Date(entry.start));
     if (!grouped.has(date)) {
       grouped.set(date, []);
     }
@@ -285,8 +308,8 @@ export function generateWeeklyReport(
   });
   
   return {
-    week_start: weekStart.toISOString().split('T')[0],
-    week_end: weekEnd.toISOString().split('T')[0],
+    week_start: toLocalYMD(weekStart),
+    week_end: toLocalYMD(weekEnd),
     total_hours: secondsToHours(totalSeconds),
     total_seconds: totalSeconds,
     daily_breakdown: dailyBreakdown,
