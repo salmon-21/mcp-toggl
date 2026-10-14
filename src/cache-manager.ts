@@ -240,12 +240,11 @@ export class CacheManager {
     
     if (!this.api) return null;
     
+    // Toggl v9 has no single-tag GET (/workspaces/{id}/tags/{tag_id} is 405),
+    // so look the tag up in the workspace list, which getTags() also caches.
     try {
-      const tag = await this.api.getTag(workspaceId, id);
-      if (tag) {
-        this.setCached(this.tags, id, tag);
-      }
-      return tag;
+      const tags = await this.getTags(workspaceId);
+      return tags.find((tag) => tag.id === id) || null;
     } catch (error) {
       console.error(`Failed to fetch tag ${id}:`, error);
       return null;
