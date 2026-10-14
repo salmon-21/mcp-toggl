@@ -423,15 +423,16 @@ export class TogglAPI {
         }
       }
 
-      // Use explicit undefined/NaN checks so a legitimate 0 cursor value
-      // (possible if Toggl ever uses it) is not mistaken for end-of-results.
-      if (
-        nextId === undefined || Number.isNaN(nextId) ||
-        nextRowNumber === undefined || Number.isNaN(nextRowNumber)
-      ) {
+      // Send only first_row_number. The server applies first_id/first_timestamp
+      // as a keyset cursor AND first_row_number as an offset on top of it, so
+      // sending all three skips a page's worth of rows each time (observed
+      // 2026-10: page 2 started at row 41 instead of 21, and a 50-row default
+      // page never got a second page). first_id alone also drops rows when
+      // order_by is not date. first_row_number alone matched a single-page
+      // fetch for every order_by tried.
+      if (nextId === undefined || nextRowNumber === undefined || Number.isNaN(nextRowNumber)) {
         break;
       }
-      payload.first_id = nextId;
       payload.first_row_number = nextRowNumber;
     }
 
