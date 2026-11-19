@@ -283,9 +283,8 @@ export interface UpdateTimeEntryRequest {
   duration?: number;
 }
 
-export interface CreateProjectRequest {
-  name: string;
-  client_id?: number;
+// Project fields that create and update share.
+export interface ProjectFields {
   is_private?: boolean;
   active?: boolean;
   color?: string;
@@ -294,16 +293,15 @@ export interface CreateProjectRequest {
   estimated_hours?: number;
 }
 
-export interface UpdateProjectRequest {
+export interface CreateProjectRequest extends ProjectFields {
+  name: string;
+  client_id?: number;
+}
+
+export interface UpdateProjectRequest extends ProjectFields {
   name?: string;
   // null clears the client assignment (Toggl accepts null in the PUT body).
   client_id?: number | null;
-  is_private?: boolean;
-  active?: boolean;
-  color?: string;
-  billable?: boolean;
-  auto_estimates?: boolean;
-  estimated_hours?: number;
 }
 
 // 'delete' removes the project's time entries; 'unassign' detaches them.

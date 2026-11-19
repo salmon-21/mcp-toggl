@@ -33,19 +33,22 @@ export class TogglAPI {
     };
   }
   
-  // Generic API request method
+  // Generic API request method.
+  // Retry policy: 429 is always retried (Toggl rejects it before processing).
+  // Other 4xx are deterministic and never retried. Network errors and 5xx are
+  // retried only for idempotent methods: a POST that timed out may already have
+  // created the resource, so resending it could create a duplicate.
   private async request<T>(
     method: string,
     endpoint: string,
     body?: any,
-    retries = 3,
-    // Writes are not idempotent: a retried POST after a timeout can create a duplicate.
-    // When false, only 429 (which Toggl rejects before processing) is retried.
-    retryOnError = true
+    retries = 3
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
+    const idempotent = method !== 'POST';
     
     for (let i = 0; i < retries; i++) {
+      let retryable = idempotent;
       try {
         const response = await fetch(url, {
           method,
@@ -64,6 +67,7 @@ export class TogglAPI {
         }
         
         if (!response.ok) {
+          retryable = idempotent && response.status >= 500;
           const text = await response.text();
           if (response.status === 401 || response.status === 403) {
             // Normalize common auth failure into a clearer message
@@ -76,18 +80,12 @@ export class TogglAPI {
           throw new Error(`Toggl API error (${response.status}): ${text}`);
         }
         
-        // Toggl returns 204, or 200 with an empty body, for some successful writes
-        // (e.g. DELETE /projects/{id}); response.json() would throw on those.
-        if (response.status === 204) {
-          return {} as T;
-        }
+        // 204 and some 200s (e.g. DELETE /projects/{id}) have an empty body,
+        // which response.json() would reject.
         const responseText = await response.text();
-        if (responseText.length === 0) {
-          return {} as T;
-        }
-        return JSON.parse(responseText) as T;
+        return (responseText.length === 0 ? {} : JSON.parse(responseText)) as T;
       } catch (error) {
-        if (!retryOnError || i === retries - 1) throw error;
+        if (!retryable || i === retries - 1) throw error;
         // Exponential backoff
         await new Promise(resolve => setTimeout(resolve, (i + 1) * 1000));
       }
@@ -96,10 +94,6 @@ export class TogglAPI {
     throw new Error('Max retries reached');
   }
   
-  private async writeRequest<T>(method: string, endpoint: string, body?: any): Promise<T> {
-    return this.request<T>(method, endpoint, body, 3, false);
-  }
-
   // User methods
   async getMe(): Promise<User> {
     return this.request<User>('GET', '/me');
@@ -168,7 +162,7 @@ export class TogglAPI {
   }
 
   async createProject(workspaceId: number, project: CreateProjectRequest): Promise<Project> {
-    return this.writeRequest<Project>('POST', `/workspaces/${workspaceId}/projects`, {
+    return this.request<Project>('POST', `/workspaces/${workspaceId}/projects`, {
       ...project,
       active: project.active ?? true,
       is_private: project.is_private ?? false
@@ -180,7 +174,7 @@ export class TogglAPI {
     projectId: number,
     updates: UpdateProjectRequest
   ): Promise<Project> {
-    return this.writeRequest<Project>(
+    return this.request<Project>(
       'PUT',
       `/workspaces/${workspaceId}/projects/${projectId}`,
       updates
@@ -193,7 +187,7 @@ export class TogglAPI {
     timeEntryDeletionMode?: ProjectDeleteMode
   ): Promise<void> {
     const query = timeEntryDeletionMode ? `?teDeletionMode=${timeEntryDeletionMode}` : '';
-    await this.writeRequest<void>(
+    await this.request<void>(
       'DELETE',
       `/workspaces/${workspaceId}/projects/${projectId}${query}`
     );
