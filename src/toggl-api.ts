@@ -12,7 +12,10 @@ import type {
   UpdateTimeEntryRequest,
   TimeEntrySearchFilters,
   ReportsSearchRequest,
-  ReportsSearchRow
+  ReportsSearchRow,
+  CreateProjectRequest,
+  UpdateProjectRequest,
+  ProjectDeleteMode
 } from './types.js';
 
 export class TogglAPI {
@@ -35,7 +38,10 @@ export class TogglAPI {
     method: string,
     endpoint: string,
     body?: any,
-    retries = 3
+    retries = 3,
+    // Writes are not idempotent: a retried POST after a timeout can create a duplicate.
+    // When false, only 429 (which Toggl rejects before processing) is retried.
+    retryOnError = true
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
     
@@ -70,14 +76,18 @@ export class TogglAPI {
           throw new Error(`Toggl API error (${response.status}): ${text}`);
         }
         
-        // Handle 204 No Content
+        // Toggl returns 204, or 200 with an empty body, for some successful writes
+        // (e.g. DELETE /projects/{id}); response.json() would throw on those.
         if (response.status === 204) {
           return {} as T;
         }
-        
-        return await response.json() as T;
+        const responseText = await response.text();
+        if (responseText.length === 0) {
+          return {} as T;
+        }
+        return JSON.parse(responseText) as T;
       } catch (error) {
-        if (i === retries - 1) throw error;
+        if (!retryOnError || i === retries - 1) throw error;
         // Exponential backoff
         await new Promise(resolve => setTimeout(resolve, (i + 1) * 1000));
       }
@@ -86,6 +96,10 @@ export class TogglAPI {
     throw new Error('Max retries reached');
   }
   
+  private async writeRequest<T>(method: string, endpoint: string, body?: any): Promise<T> {
+    return this.request<T>(method, endpoint, body, 3, false);
+  }
+
   // User methods
   async getMe(): Promise<User> {
     return this.request<User>('GET', '/me');
@@ -151,6 +165,38 @@ export class TogglAPI {
       if (project) return project;
     }
     throw new Error(`Project ${projectId} not found`);
+  }
+
+  async createProject(workspaceId: number, project: CreateProjectRequest): Promise<Project> {
+    return this.writeRequest<Project>('POST', `/workspaces/${workspaceId}/projects`, {
+      ...project,
+      active: project.active ?? true,
+      is_private: project.is_private ?? false
+    });
+  }
+
+  async updateProject(
+    workspaceId: number,
+    projectId: number,
+    updates: UpdateProjectRequest
+  ): Promise<Project> {
+    return this.writeRequest<Project>(
+      'PUT',
+      `/workspaces/${workspaceId}/projects/${projectId}`,
+      updates
+    );
+  }
+
+  async deleteProject(
+    workspaceId: number,
+    projectId: number,
+    timeEntryDeletionMode?: ProjectDeleteMode
+  ): Promise<void> {
+    const query = timeEntryDeletionMode ? `?teDeletionMode=${timeEntryDeletionMode}` : '';
+    await this.writeRequest<void>(
+      'DELETE',
+      `/workspaces/${workspaceId}/projects/${projectId}${query}`
+    );
   }
   
   // Client methods

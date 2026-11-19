@@ -144,6 +144,16 @@ export class CacheManager {
     }
   }
   
+  // Keep the project cache in step with writes so hydrated entries and summaries
+  // don't show a stale name or a deleted project until the TTL expires.
+  setProject(project: Project): void {
+    this.setCached(this.projects, project.id, project);
+  }
+
+  removeProject(id: number): void {
+    this.projects.delete(id);
+  }
+
   // Client methods
   async getClient(id: number): Promise<Client | null> {
     const cached = this.getCached(this.clients, id);

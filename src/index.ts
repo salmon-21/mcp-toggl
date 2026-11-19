@@ -29,8 +29,77 @@ import {
 import type {
   CacheConfig,
   TimeEntry,
-  TimeEntrySearchFilters
+  TimeEntrySearchFilters,
+  CreateProjectRequest,
+  UpdateProjectRequest,
+  ProjectDeleteMode
 } from './types.js';
+
+// Argument validation for the write tools. Read tools pass args through loosely,
+// but a wrong type on a write would reach Toggl and change data, so reject it here.
+type ToolArgs = Record<string, unknown> | undefined;
+
+function optionalNumberArg(args: ToolArgs, key: string): number | undefined {
+  const v = args?.[key];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new Error(`${key} must be a number`);
+  }
+  return v;
+}
+
+function requiredNumberArg(args: ToolArgs, key: string): number {
+  const v = optionalNumberArg(args, key);
+  if (v === undefined) throw new Error(`${key} is required`);
+  return v;
+}
+
+function optionalBooleanArg(args: ToolArgs, key: string): boolean | undefined {
+  const v = args?.[key];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'boolean') throw new Error(`${key} must be a boolean`);
+  return v;
+}
+
+function optionalStringArg(args: ToolArgs, key: string): string | undefined {
+  const v = args?.[key];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string') throw new Error(`${key} must be a string`);
+  return v;
+}
+
+function projectNameArg(args: ToolArgs): string {
+  const v = optionalStringArg(args, 'name')?.trim();
+  if (!v) throw new Error('Project name is required');
+  return v;
+}
+
+// Fields shared by create and update, copied only when present so an update
+// sends just what the caller asked to change.
+function projectFieldsFromArgs(args: ToolArgs): Omit<UpdateProjectRequest, 'name' | 'client_id'> {
+  const fields: Omit<UpdateProjectRequest, 'name' | 'client_id'> = {};
+  const isPrivate = optionalBooleanArg(args, 'is_private');
+  if (isPrivate !== undefined) fields.is_private = isPrivate;
+  const active = optionalBooleanArg(args, 'active');
+  if (active !== undefined) fields.active = active;
+  const color = optionalStringArg(args, 'color');
+  if (color !== undefined) fields.color = color;
+  const billable = optionalBooleanArg(args, 'billable');
+  if (billable !== undefined) fields.billable = billable;
+  const autoEstimates = optionalBooleanArg(args, 'auto_estimates');
+  if (autoEstimates !== undefined) fields.auto_estimates = autoEstimates;
+  const estimatedHours = optionalNumberArg(args, 'estimated_hours');
+  if (estimatedHours !== undefined) fields.estimated_hours = estimatedHours;
+  return fields;
+}
+
+function workspaceIdForWrite(args: ToolArgs): number {
+  const workspaceId = optionalNumberArg(args, 'workspace_id') ?? defaultWorkspaceId;
+  if (!workspaceId) {
+    throw new Error('Workspace ID required (set TOGGL_DEFAULT_WORKSPACE_ID or provide workspace_id)');
+  }
+  return workspaceId;
+}
 
 // Version for CLI output and server metadata
 const VERSION = '1.0.0';
@@ -382,6 +451,88 @@ const tools: Tool[] = [
           description: 'Workspace ID (uses default if not provided)'
         }
       }
+    },
+  },
+  {
+    name: 'toggl_create_project',
+    description: 'Create a new project in a workspace',
+    annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Project name' },
+        client_id: { type: 'number', description: 'Client ID to assign the project to' },
+        active: { type: 'boolean', description: 'Whether the project is active. Defaults to true.' },
+        is_private: { type: 'boolean', description: 'Whether the project is private' },
+        color: { type: 'string', description: 'Hex color (e.g. "#06aaf5")' },
+        billable: {
+          type: 'boolean',
+          description: 'Whether time tracked on this project is billable by default. Free plans ignore this flag.'
+        },
+        auto_estimates: { type: 'boolean', description: 'Enable auto-estimates' },
+        estimated_hours: { type: 'number', description: 'Estimated hours for the project' },
+        workspace_id: {
+          type: 'number',
+          description: 'Workspace ID (uses default if not provided)'
+        }
+      },
+      required: ['name']
+    },
+  },
+  {
+    name: 'toggl_update_project',
+    description:
+      'Update fields on an existing project. Pass only the fields to change. ' +
+      'Set active=false to archive (or true to restore); pass client_id=null to remove the client.',
+    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project ID to update' },
+        name: { type: 'string', description: 'New project name' },
+        client_id: {
+          type: ['number', 'null'],
+          description: 'New client ID; pass null to remove the assignment'
+        },
+        active: { type: 'boolean', description: 'Set to false to archive the project' },
+        is_private: { type: 'boolean', description: 'Whether the project is private' },
+        color: { type: 'string', description: 'Hex color (e.g. "#06aaf5")' },
+        billable: {
+          type: 'boolean',
+          description: 'Whether time tracked on this project is billable by default. Free plans ignore this flag.'
+        },
+        auto_estimates: { type: 'boolean', description: 'Enable auto-estimates' },
+        estimated_hours: { type: 'number', description: 'Estimated hours for the project' },
+        workspace_id: {
+          type: 'number',
+          description: 'Workspace ID (uses default if not provided)'
+        }
+      },
+      required: ['project_id']
+    },
+  },
+  {
+    name: 'toggl_delete_project',
+    description:
+      'Permanently delete a project. Prefer toggl_update_project with active=false to archive, ' +
+      'which keeps its history. Ask the user before deleting.',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project ID to delete' },
+        time_entry_deletion_mode: {
+          type: 'string',
+          enum: ['delete', 'unassign'],
+          description:
+            "What happens to the project's time entries: 'delete' removes them, 'unassign' keeps them without a project. If omitted, Toggl applies its default."
+        },
+        workspace_id: {
+          type: 'number',
+          description: 'Workspace ID (uses default if not provided)'
+        }
+      },
+      required: ['project_id']
     },
   },
   {
@@ -897,6 +1048,78 @@ const callToolHandler = async (request: { params: { name: string; arguments?: Re
         };
       }
       
+      case 'toggl_create_project': {
+        const workspaceId = workspaceIdForWrite(args);
+        const project: CreateProjectRequest = {
+          name: projectNameArg(args),
+          ...projectFieldsFromArgs(args)
+        };
+        const clientId = optionalNumberArg(args, 'client_id');
+        if (clientId !== undefined) project.client_id = clientId;
+
+        const created = await api.createProject(workspaceId, project);
+        cache.setProject(created);
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ success: true, message: 'Project created', project: created }, null, 2)
+          }]
+        };
+      }
+
+      case 'toggl_update_project': {
+        const workspaceId = workspaceIdForWrite(args);
+        const projectId = requiredNumberArg(args, 'project_id');
+        const updates: UpdateProjectRequest = projectFieldsFromArgs(args);
+        if (args?.name !== undefined) updates.name = projectNameArg(args);
+        if (args && 'client_id' in args) {
+          const clientId = args.client_id;
+          if (clientId !== null && (typeof clientId !== 'number' || !Number.isFinite(clientId))) {
+            throw new Error('client_id must be a number or null');
+          }
+          updates.client_id = clientId;
+        }
+        if (Object.keys(updates).length === 0) {
+          throw new Error('No fields to update; provide at least one updatable field');
+        }
+
+        const updated = await api.updateProject(workspaceId, projectId, updates);
+        cache.setProject(updated);
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ success: true, message: 'Project updated', project: updated }, null, 2)
+          }]
+        };
+      }
+
+      case 'toggl_delete_project': {
+        const workspaceId = workspaceIdForWrite(args);
+        const projectId = requiredNumberArg(args, 'project_id');
+        const mode = optionalStringArg(args, 'time_entry_deletion_mode');
+        if (mode !== undefined && mode !== 'delete' && mode !== 'unassign') {
+          throw new Error('time_entry_deletion_mode must be "delete" or "unassign"');
+        }
+
+        await api.deleteProject(workspaceId, projectId, mode as ProjectDeleteMode | undefined);
+        cache.removeProject(projectId);
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              message: 'Project deleted',
+              workspace_id: workspaceId,
+              project_id: projectId,
+              time_entry_deletion_mode: mode ?? null
+            }, null, 2)
+          }]
+        };
+      }
+
       case 'toggl_list_clients': {
         const workspaceId = args?.workspace_id || defaultWorkspaceId;
         if (!workspaceId) {

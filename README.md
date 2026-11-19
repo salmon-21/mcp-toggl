@@ -229,6 +229,34 @@ List projects in a workspace.
 #### `toggl_list_clients`
 List clients in a workspace.
 
+#### `toggl_create_project`
+Create a project. Only `name` is required; `active` defaults to true and `is_private` to false.
+```json
+{
+  "name": "Website redesign",
+  "client_id": 123,
+  "color": "#06aaf5"
+}
+```
+
+#### `toggl_update_project`
+Change only the fields you pass. `active: false` archives the project; `client_id: null` removes the client.
+```json
+{
+  "project_id": 456,
+  "active": false
+}
+```
+
+#### `toggl_delete_project`
+Permanently delete a project. `time_entry_deletion_mode` is `delete` (remove its time entries) or `unassign` (keep them without a project); Toggl's default applies if omitted. Archiving is usually the safer choice.
+```json
+{
+  "project_id": 456,
+  "time_entry_deletion_mode": "unassign"
+}
+```
+
 ### Cache Management
 
 #### `toggl_warm_cache`
